@@ -14,7 +14,13 @@ both; they share nothing at runtime.
 
 ![The Neovim window: eligible roles on top, live activations below](docs/nvim-window.png)
 
-<sub>Account, tenant and scope names are blurred in the screenshot.</sub>
+<sub>**Neovim** — `:AzPim` opens a floating window.</sub>
+
+![The VS Code sidebar: eligible roles with checkboxes, live activations below](docs/vscode-sidebar.png)
+
+<sub>**VS Code** — the same roles in a sidebar tree view.</sub>
+
+<sub>Account, tenant and scope names are blurred in both screenshots.</sub>
 
 ---
 

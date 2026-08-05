@@ -6,9 +6,7 @@ parent directory; same endpoints, same semantics, VS Code-native UI.
 
 ![The Azure PIM sidebar: eligible roles with checkboxes, live activations below](../docs/vscode-sidebar.png)
 
-<sub>Scope names are blurred in the screenshot. The warning at the top is a
-transient ARM gateway timeout being surfaced verbatim — it is why the Azure
-activations count reads 0 there.</sub>
+<sub>Scope names are blurred in the screenshot.</sub>
 
 ## Requirements
 
