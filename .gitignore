@@ -1,0 +1,40 @@
+# --- Node / VS Code extension ------------------------------------------------
+node_modules/
+out/
+dist/
+*.vsix
+*.tsbuildinfo
+.npm/
+npm-debug.log*
+yarn-error.log*
+
+# --- Lua / Neovim --------------------------------------------------------------
+*.rock
+luac.out
+.luarc.json
+doc/tags
+
+# --- Secrets and local state ---------------------------------------------------
+# Nothing here is written by the project, but keep the usual footguns out.
+*.pem
+*.key
+*.pfx
+*.env
+.env.*
+!.env.example
+azpim-graph-token.json
+.azure/
+
+# --- Editors and tooling -------------------------------------------------------
+.idea/
+*.swp
+*.swo
+*~
+.cache/
+
+# --- OS ------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+desktop.ini

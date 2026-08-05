@@ -1,0 +1,215 @@
+{
+  "name": "azpim",
+  "displayName": "Azure PIM",
+  "description": "Activate Azure resource and Entra ID PIM roles from a sidebar.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "license": "MIT-0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dahorg/AzPim.git",
+    "directory": "vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/dahorg/AzPim/issues"
+  },
+  "homepage": "https://github.com/dahorg/AzPim/tree/main/vscode#readme",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Azure",
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "azpim",
+          "title": "Azure PIM",
+          "icon": "media/shield.svg"
+        }
+      ]
+    },
+    "views": {
+      "azpim": [
+        {
+          "id": "azpim.roles",
+          "name": "Roles",
+          "icon": "media/shield.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "azpim.roles",
+        "contents": "Sign in with the Azure CLI to list your PIM roles.\n[Refresh](command:azpim.refresh)\n\nThe Azure CLI (`az`) must be on your PATH and logged in with `az login`."
+      }
+    ],
+    "commands": [
+      {
+        "command": "azpim.focus",
+        "title": "Show Roles",
+        "category": "Azure PIM"
+      },
+      {
+        "command": "azpim.refresh",
+        "title": "Refresh",
+        "category": "Azure PIM",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "azpim.activate",
+        "title": "Activate Role",
+        "category": "Azure PIM",
+        "icon": "$(play)"
+      },
+      {
+        "command": "azpim.deactivate",
+        "title": "Deactivate Role",
+        "category": "Azure PIM",
+        "icon": "$(primitive-square)"
+      },
+      {
+        "command": "azpim.activateChecked",
+        "title": "Activate Checked Roles",
+        "category": "Azure PIM",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "azpim.clearChecked",
+        "title": "Clear Checked Roles",
+        "category": "Azure PIM",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "azpim.graphLogout",
+        "title": "Forget Cached Entra ID Sign-in",
+        "category": "Azure PIM"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "azpim.activate",
+          "when": "false"
+        },
+        {
+          "command": "azpim.deactivate",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "azpim.activateChecked",
+          "when": "view == azpim.roles && azpim.hasChecked",
+          "group": "navigation@1"
+        },
+        {
+          "command": "azpim.clearChecked",
+          "when": "view == azpim.roles && azpim.hasChecked",
+          "group": "navigation@2"
+        },
+        {
+          "command": "azpim.refresh",
+          "when": "view == azpim.roles",
+          "group": "navigation@3"
+        },
+        {
+          "command": "azpim.graphLogout",
+          "when": "view == azpim.roles",
+          "group": "1_auth"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "azpim.activate",
+          "when": "view == azpim.roles && viewItem == azpim.eligible",
+          "group": "inline"
+        },
+        {
+          "command": "azpim.deactivate",
+          "when": "view == azpim.roles && viewItem == azpim.active",
+          "group": "inline"
+        },
+        {
+          "command": "azpim.activate",
+          "when": "view == azpim.roles && viewItem == azpim.eligible",
+          "group": "1_act"
+        },
+        {
+          "command": "azpim.deactivate",
+          "when": "view == azpim.roles && viewItem == azpim.active",
+          "group": "1_act"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Azure PIM",
+      "properties": {
+        "azpim.duration": {
+          "type": "string",
+          "default": "PT8H",
+          "markdownDescription": "Default activation length, as an ISO 8601 duration (e.g. `PT8H`)."
+        },
+        "azpim.justification": {
+          "type": "string",
+          "default": "Activated from VS Code",
+          "description": "Default justification sent with activation requests."
+        },
+        "azpim.prompt": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask for justification and duration before activating. When false, the defaults are used silently."
+        },
+        "azpim.entraAuth": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "vscode",
+            "device"
+          ],
+          "enumDescriptions": [
+            "Try VS Code's Microsoft account provider, fall back to a device-code sign-in if it cannot get the PIM scopes.",
+            "Only use VS Code's built-in Microsoft account provider.",
+            "Only use the extension's own device-code sign-in."
+          ],
+          "default": "auto",
+          "description": "How to obtain the Microsoft Graph token that Entra ID roles need."
+        },
+        "azpim.graphClientId": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Public client used for the Microsoft Graph sign-in. Empty uses Microsoft Graph PowerShell, whose tokens carry every scope your tenant has consented for it; point this at your own registration to get a token limited to the three PIM scopes. See the README."
+        },
+        "azpim.graphTenantId": {
+          "type": "string",
+          "default": "",
+          "description": "Tenant to sign in to for Entra ID roles. Empty uses the tenant the Azure CLI is pointed at."
+        },
+        "azpim.showEntraRoles": {
+          "type": "boolean",
+          "default": true,
+          "description": "List Entra ID (directory) roles alongside Azure resource roles. Turning this off avoids the separate Microsoft Graph sign-in entirely."
+        },
+        "azpim.azureCliPath": {
+          "type": "string",
+          "default": "az",
+          "description": "Path to the Azure CLI executable."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}
