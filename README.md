@@ -12,22 +12,9 @@ Both hit the same PIM endpoints with the same semantics — eligible roles on to
 your live activations below, activate and deactivate in place. Pick one or use
 both; they share nothing at runtime.
 
-```
-╭──────────────────────────── Azure PIM ─────────────────────────────╮
-│ Azure PIM   admin@contoso.com  ·  Contoso AS                       │
-│ <Tab> select  <CR> activate  a activate selected  d deactivate  …   │
-│                                                                    │
-│ ELIGIBLE — Azure resources (19)                                    │
-│   [x] Owner                   Contoso Group ASA                    │
-│   [ ] Contributor             Shared Services     via group        │
-│                                                                    │
-│ ELIGIBLE — Entra ID roles (2)                                      │
-│   [ ] Global Reader           Directory                            │
-│                                                                    │
-│ ACTIVE — Azure resources (1)                                       │
-│   ●   Owner                   prod-01             7h 42m left      │
-╰────────────────────────────────────────────────────────────────────╯
-```
+![The Neovim window: eligible roles on top, live activations below](docs/nvim-window.png)
+
+<sub>Account, tenant and scope names are blurred in the screenshot.</sub>
 
 ---
 
