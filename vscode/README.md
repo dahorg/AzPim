@@ -4,18 +4,11 @@ Activate Azure PIM roles — both **Azure resource** roles and **Entra ID
 (directory)** roles — from the sidebar. A port of the Neovim plugin in the
 parent directory; same endpoints, same semantics, VS Code-native UI.
 
-```
-AZURE PIM                                     ▶  ⊘  ⟳
-admin@contoso.com · Contoso AS
+![The Azure PIM sidebar: eligible roles with checkboxes, live activations below](../docs/vscode-sidebar.png)
 
-▾ Eligible — Azure resources                          19
-    ☑ Owner            Contoso Group ASA            ▶
-    ☐ Contributor      Shared Services · via group  ▶
-▾ Eligible — Entra ID roles                            2
-    ☐ Global Reader    Directory                    ▶
-▾ Active — Azure resources                             1
-    ● Owner            prod-01 · 7h 42m left        ■
-```
+<sub>Scope names are blurred in the screenshot. The warning at the top is a
+transient ARM gateway timeout being surfaced verbatim — it is why the Azure
+activations count reads 0 there.</sub>
 
 ## Requirements
 
