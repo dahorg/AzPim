@@ -1,7 +1,17 @@
--- PIM operations. Azure resource roles go through the Azure CLI (`az rest`);
--- Entra ID roles go through graph.lua, which holds its own token because the
--- CLI's app registration can never obtain the Graph role-management scopes.
+-- PIM operations. Azure resource roles go through ARM, authenticated with a
+-- token from `az account get-access-token` that we cache and reuse; Entra ID
+-- roles go through graph.lua, which holds its own token because the CLI's
+-- app registration can never obtain the Graph role-management scopes.
+--
+-- We still shell out to `az` to *obtain* the ARM token (it already knows how
+-- to refresh silently from the CLI's own login), but every actual REST call
+-- goes straight over `curl` with that cached bearer token. Each `az`
+-- invocation costs roughly 1-3s of Python interpreter/import overhead before
+-- it even reaches the network, and a refresh used to spin up several of
+-- them (`az rest` per page, per section); caching the token cuts that down
+-- to one `az` call per hour instead of one per request.
 local graph = require("azpim.graph")
+local http = require("azpim.http")
 
 local M = {}
 
@@ -44,46 +54,96 @@ local function az_json(args, cb)
   end
 end
 
---- GET a URL, following `nextLink` / `@odata.nextLink` until exhausted.
-local function get_all(url, cb, acc)
-  acc = acc or {}
-  az_json({ "rest", "--method", "get", "--url", url }, function(data, err)
+-- ---------------------------------------------------------------------------
+-- ARM token cache
+-- ---------------------------------------------------------------------------
+
+local arm_session = { access_token = nil, expires_at = 0, claims = nil }
+
+--- Get a cached ARM bearer token, fetching/refreshing via the Azure CLI only
+--- when we don't have one or it's about to expire.
+---@param cb fun(token: string|nil, err: string|nil)
+local function arm_token(cb)
+  if arm_session.access_token and arm_session.expires_at - 60 > os.time() then
+    return cb(arm_session.access_token, nil)
+  end
+  az_json({ "account", "get-access-token", "--resource", ARM, "-o", "json" }, function(data, err)
     if err then
       return cb(nil, err)
     end
-    vim.list_extend(acc, data.value or {})
-    local next_link = data.nextLink or data["@odata.nextLink"]
-    if next_link then
-      get_all(next_link, cb, acc)
-    else
-      cb(acc, nil)
+    if not data.accessToken then
+      return cb(nil, "az did not return an access token")
     end
+    arm_session.access_token = data.accessToken
+    arm_session.expires_at = tonumber(data.expires_on) or (os.time() + 3000)
+    arm_session.claims = http.jwt_claims(data.accessToken)
+    cb(arm_session.access_token, nil)
+  end)
+end
+
+--- GET a URL, following `nextLink` / `@odata.nextLink` until exhausted.
+local function get_all(url, cb, acc)
+  acc = acc or {}
+  arm_token(function(token, terr)
+    if terr then
+      return cb(nil, terr)
+    end
+    http.curl({
+      "-X",
+      "GET",
+      http.encode_query(url),
+      "-H",
+      "Authorization: Bearer " .. token,
+    }, function(data, err)
+      if err then
+        return cb(nil, err)
+      end
+      if data.error then
+        return cb(nil, (data.error.message or data.error.code or vim.inspect(data.error)))
+      end
+      vim.list_extend(acc, data.value or {})
+      local next_link = data.nextLink or data["@odata.nextLink"]
+      if next_link then
+        get_all(next_link, cb, acc)
+      else
+        cb(acc, nil)
+      end
+    end)
   end)
 end
 
 local function send(method, url, body, cb)
-  local path = vim.fn.tempname() .. ".json"
-  local fh, ferr = io.open(path, "w")
-  if not fh then
-    return vim.schedule(function()
-      cb(nil, "could not write request body: " .. tostring(ferr))
+  arm_token(function(token, terr)
+    if terr then
+      return cb(nil, terr)
+    end
+    local path = vim.fn.tempname() .. ".json"
+    local fh, ferr = io.open(path, "w")
+    if not fh then
+      return cb(nil, "could not write request body: " .. tostring(ferr))
+    end
+    fh:write(vim.json.encode(body))
+    fh:close()
+    http.curl({
+      "-X",
+      method:upper(),
+      http.encode_query(url),
+      "-H",
+      "Authorization: Bearer " .. token,
+      "-H",
+      "Content-Type: application/json",
+      "--data-binary",
+      "@" .. path,
+    }, function(data, err)
+      os.remove(path)
+      if err then
+        return cb(nil, err)
+      end
+      if data.error then
+        return cb(nil, (data.error.message or data.error.code or vim.inspect(data.error)))
+      end
+      cb(data, nil)
     end)
-  end
-  fh:write(vim.json.encode(body))
-  fh:close()
-  az_json({
-    "rest",
-    "--method",
-    method,
-    "--url",
-    url,
-    "--headers",
-    "Content-Type=application/json",
-    "--body",
-    "@" .. path,
-  }, function(data, err)
-    os.remove(path)
-    cb(data, err)
   end)
 end
 
@@ -101,18 +161,31 @@ local function now_iso()
   return os.date("!%Y-%m-%dT%H:%M:%SZ")
 end
 
---- Object id of the signed-in user. Cached for the session.
+--- Object id of the signed-in user. The ARM access token already carries it
+--- as the `oid` claim, so this piggybacks on `arm_token` instead of spinning
+--- up a dedicated `az ad signed-in-user show` process.
 local cached_oid
 function M.signed_in_user(cb)
   if cached_oid then
     return cb(cached_oid, nil)
   end
-  az_json({ "ad", "signed-in-user", "show", "-o", "json" }, function(data, err)
+  arm_token(function(_, err)
     if err then
       return cb(nil, err)
     end
-    cached_oid = data.id
-    cb(data.id, nil)
+    local oid = arm_session.claims and arm_session.claims.oid
+    if not oid then
+      -- Fallback for the unlikely case the token shape changes underneath us.
+      return az_json({ "ad", "signed-in-user", "show", "-o", "json" }, function(data, aerr)
+        if aerr then
+          return cb(nil, aerr)
+        end
+        cached_oid = data.id
+        cb(data.id, nil)
+      end)
+    end
+    cached_oid = oid
+    cb(oid, nil)
   end)
 end
 
