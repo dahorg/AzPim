@@ -240,23 +240,23 @@ function M.refresh()
   state.loading = true
   state.errors = {}
   state.hint = nil
+  state.eligible, state.active = {}, {}
   render()
 
+  -- Azure's tenant-wide role-assignment endpoints can take many seconds to
+  -- fan out across subscriptions (Azure-side, not something we can speed
+  -- up). Rather than blank the window until every one of the 5 requests
+  -- below finishes, fill in each section as soon as its own call returns.
   local pending = 5
-  local eligible, active = {}, {}
   local function done()
     pending = pending - 1
-    if pending > 0 then
-      return
+    if pending == 0 then
+      state.loading = false
     end
-    sort_items(eligible)
-    sort_items(active)
-    state.eligible, state.active = eligible, active
-    state.loading = false
     render()
   end
 
-  local function collect(target, fetch, label)
+  local function collect(target_key, fetch, label)
     fetch(function(items, err)
       if err then
         if az.is_missing_graph_scope(err) then
@@ -265,7 +265,8 @@ function M.refresh()
           table.insert(state.errors, label .. ": " .. err)
         end
       else
-        vim.list_extend(target, items)
+        vim.list_extend(state[target_key], items)
+        sort_items(state[target_key])
       end
       done()
     end)
@@ -277,10 +278,10 @@ function M.refresh()
     end
     done()
   end)
-  collect(eligible, az.azure_eligible, "azure eligible")
-  collect(active, az.azure_active, "azure active")
-  collect(eligible, az.entra_eligible, "entra eligible")
-  collect(active, az.entra_active, "entra active")
+  collect("eligible", az.azure_eligible, "azure eligible")
+  collect("active", az.azure_active, "azure active")
+  collect("eligible", az.entra_eligible, "entra eligible")
+  collect("active", az.entra_active, "entra active")
 end
 
 -- ---------------------------------------------------------------------------
