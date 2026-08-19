@@ -11,6 +11,7 @@ local state = {
   buf = nil,
   win = nil,
   loading = false,
+  loading_sections = {}, -- "azure_eligible"|"azure_active"|"entra_eligible"|"entra_active" -> true
   account = nil,
   eligible = {}, -- azpim.Item[]
   active = {}, -- azpim.Item[]
@@ -21,6 +22,44 @@ local state = {
   selected = {}, -- key -> true
   cfg = nil,
 }
+
+local SPINNER_FRAMES = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+local spinner_frame = 1
+local spinner_timer = nil
+local render -- forward declaration; defined in the rendering section below
+
+local function any_section_loading()
+  for _, v in pairs(state.loading_sections) do
+    if v then
+      return true
+    end
+  end
+  return false
+end
+
+--- Keep the spinner glyph animating while any section is still loading, and
+--- stop the timer (rather than tick forever in the background) once nothing
+--- is pending.
+local function ensure_spinner()
+  if spinner_timer or not any_section_loading() then
+    return
+  end
+  spinner_timer = vim.uv.new_timer()
+  spinner_timer:start(
+    0,
+    120,
+    vim.schedule_wrap(function()
+      if not any_section_loading() then
+        spinner_timer:stop()
+        spinner_timer:close()
+        spinner_timer = nil
+        return
+      end
+      spinner_frame = (spinner_frame % #SPINNER_FRAMES) + 1
+      render()
+    end)
+  )
+end
 
 -- ---------------------------------------------------------------------------
 -- helpers
@@ -112,7 +151,7 @@ local function selected_items()
   return out
 end
 
-local function render()
+function render()
   if not (state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
     return
   end
@@ -163,13 +202,17 @@ local function render()
     add("")
   end
 
-  local function section(title, items, kind, is_active)
+  local function section(title, items, kind, is_active, loading_key)
     local subset = vim.tbl_filter(function(it)
       return it.kind == kind
     end, items)
     add(string.format("%s (%d)", title, #subset), "AzPimHeader")
     if #subset == 0 then
-      add("    none", "AzPimDim")
+      if loading_key and state.loading_sections[loading_key] then
+        add("    " .. SPINNER_FRAMES[spinner_frame] .. " loading…", "AzPimDim")
+      else
+        add("    none", "AzPimDim")
+      end
     end
     for _, it in ipairs(subset) do
       local prefix
@@ -186,10 +229,10 @@ local function render()
     add("")
   end
 
-  section("ELIGIBLE — Azure resources", state.eligible, "azure", false)
-  section("ELIGIBLE — Entra ID roles", state.eligible, "entra", false)
-  section("ACTIVE — Azure resources", state.active, "azure", true)
-  section("ACTIVE — Entra ID roles", state.active, "entra", true)
+  section("ELIGIBLE — Azure resources", state.eligible, "azure", false, "azure_eligible")
+  section("ELIGIBLE — Entra ID roles", state.eligible, "entra", false, "entra_eligible")
+  section("ACTIVE — Azure resources", state.active, "azure", true, "azure_active")
+  section("ACTIVE — Entra ID roles", state.active, "entra", true, "entra_active")
 
   local n = #selected_items()
   if n > 0 then
@@ -241,6 +284,13 @@ function M.refresh()
   state.errors = {}
   state.hint = nil
   state.eligible, state.active = {}, {}
+  state.loading_sections = {
+    azure_eligible = true,
+    azure_active = true,
+    entra_eligible = true,
+    entra_active = true,
+  }
+  ensure_spinner()
   render()
 
   -- Azure's tenant-wide role-assignment endpoints can take many seconds to
@@ -256,7 +306,7 @@ function M.refresh()
     render()
   end
 
-  local function collect(target_key, fetch, label)
+  local function collect(target_key, loading_key, fetch, label)
     fetch(function(items, err)
       if err then
         if az.is_missing_graph_scope(err) then
@@ -268,6 +318,7 @@ function M.refresh()
         vim.list_extend(state[target_key], items)
         sort_items(state[target_key])
       end
+      state.loading_sections[loading_key] = nil
       done()
     end)
   end
@@ -278,10 +329,10 @@ function M.refresh()
     end
     done()
   end)
-  collect("eligible", az.azure_eligible, "azure eligible")
-  collect("active", az.azure_active, "azure active")
-  collect("eligible", az.entra_eligible, "entra eligible")
-  collect("active", az.entra_active, "entra active")
+  collect("eligible", "azure_eligible", az.azure_eligible, "azure eligible")
+  collect("active", "azure_active", az.azure_active, "azure active")
+  collect("eligible", "entra_eligible", az.entra_eligible, "entra eligible")
+  collect("active", "entra_active", az.entra_active, "entra active")
 end
 
 -- ---------------------------------------------------------------------------
