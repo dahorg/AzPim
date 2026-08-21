@@ -279,7 +279,8 @@ end
 -- data loading
 -- ---------------------------------------------------------------------------
 
-function M.refresh()
+---@param on_done fun()|nil called once every section has settled
+function M.refresh(on_done)
   state.loading = true
   state.errors = {}
   state.hint = nil
@@ -302,6 +303,9 @@ function M.refresh()
     pending = pending - 1
     if pending == 0 then
       state.loading = false
+      if on_done then
+        on_done()
+      end
     end
     render()
   end
@@ -364,12 +368,68 @@ local function with_opts(action, count, fn)
   end)
 end
 
+--- Has `item` reached the expected post-request state in `state.active` yet?
+local function settled(item, action)
+  local found = false
+  for _, active in ipairs(state.active) do
+    if
+      active.kind == item.kind
+      and active.role_definition_id == item.role_definition_id
+      and active.scope_id == item.scope_id
+    then
+      found = true
+      break
+    end
+  end
+  return action == "activate" and found or not found
+end
+
+-- Azure resource-role activations are provisioned asynchronously: the PUT
+-- returns immediately (often before roleAssignmentScheduleInstances has
+-- caught up), and fan-out across subscriptions can take well past a single
+-- short delay. Poll with backoff instead of refreshing once and giving up.
+local POLL_DELAYS_MS = { 2500, 4000, 8000, 15000, 30000 }
+
+local function poll_until_settled(pending, attempt)
+  M.refresh(function()
+    if not (state.win and vim.api.nvim_win_is_valid(state.win)) then
+      return
+    end
+    local unsettled = {}
+    for _, p in ipairs(pending) do
+      if not settled(p.item, p.action) then
+        table.insert(unsettled, p)
+      end
+    end
+    if #unsettled == 0 then
+      return
+    end
+    local delay = POLL_DELAYS_MS[attempt]
+    if not delay then
+      notify(
+        ("still waiting on Azure for %d role%s — press 'r' to check again"):format(
+          #unsettled,
+          #unsettled == 1 and "" or "s"
+        ),
+        vim.log.levels.WARN
+      )
+      return
+    end
+    vim.defer_fn(function()
+      if state.win and vim.api.nvim_win_is_valid(state.win) then
+        poll_until_settled(unsettled, attempt + 1)
+      end
+    end, delay)
+  end)
+end
+
 local function submit(items, action)
   if #items == 0 then
     return notify("no role under cursor", vim.log.levels.WARN)
   end
   with_opts(action, #items, function(opts)
     local left = #items
+    local succeeded = {}
     for _, item in ipairs(items) do
       local label = string.format("%s @ %s", item.role, item.scope)
       az.dispatch(item, action, opts, function(_, err)
@@ -378,15 +438,11 @@ local function submit(items, action)
         else
           notify(("%s: %s"):format(action == "activate" and "activated" or "deactivated", label))
           state.selected[key_of(item)] = nil
+          table.insert(succeeded, { item = item, action = action })
         end
         left = left - 1
-        if left == 0 then
-          -- Activations take a moment to become Provisioned server-side.
-          vim.defer_fn(function()
-            if state.win and vim.api.nvim_win_is_valid(state.win) then
-              M.refresh()
-            end
-          end, 2500)
+        if left == 0 and #succeeded > 0 then
+          poll_until_settled(succeeded, 1)
         end
       end)
     end
