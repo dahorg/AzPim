@@ -93,6 +93,7 @@ export async function azureActive(): Promise<PimItem[]> {
   const items = await armGetAll(
     `${ARM}/providers/Microsoft.Authorization/roleAssignmentScheduleInstances${AS_TARGET}`,
   );
+  const seen = new Set<string>();
   return items
     // Only PIM activations, not standing/permanent assignments.
     .filter((it) => (it.properties ?? {}).assignmentType === "Activated")
@@ -111,6 +112,14 @@ export async function azureActive(): Promise<PimItem[]> {
         memberType: p.memberType,
         endTime: p.endDateTime ?? undefined,
       } satisfies PimItem;
+    })
+    // The same activation can be reported once per inherited group path;
+    // collapse those down to a single row per role+scope.
+    .filter((item) => {
+      const key = `${item.scopeId}|${item.roleDefinitionId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     });
 }
 

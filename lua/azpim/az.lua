@@ -237,23 +237,30 @@ function M.azure_active(cb)
       return cb(nil, err)
     end
     local out = {}
+    local seen = {}
     for _, it in ipairs(items) do
       local p = it.properties or {}
       -- Only PIM activations, not standing/permanent assignments.
       if p.assignmentType == "Activated" then
-        local ex = p.expandedProperties or {}
-        table.insert(out, {
-          kind = "azure",
-          state = "active",
-          role = (ex.roleDefinition or {}).displayName or p.roleDefinitionId,
-          scope = (ex.scope or {}).displayName or p.scope,
-          scope_type = (ex.scope or {}).type,
-          scope_id = p.scope,
-          role_definition_id = p.roleDefinitionId,
-          eligibility_id = p.linkedRoleEligibilityScheduleId,
-          member_type = p.memberType,
-          end_time = p.endDateTime,
-        })
+        -- The same activation can be reported once per inherited group path;
+        -- collapse those down to a single row per role+scope.
+        local key = p.scope .. "|" .. p.roleDefinitionId
+        if not seen[key] then
+          seen[key] = true
+          local ex = p.expandedProperties or {}
+          table.insert(out, {
+            kind = "azure",
+            state = "active",
+            role = (ex.roleDefinition or {}).displayName or p.roleDefinitionId,
+            scope = (ex.scope or {}).displayName or p.scope,
+            scope_type = (ex.scope or {}).type,
+            scope_id = p.scope,
+            role_definition_id = p.roleDefinitionId,
+            eligibility_id = p.linkedRoleEligibilityScheduleId,
+            member_type = p.memberType,
+            end_time = p.endDateTime,
+          })
+        end
       end
     end
     cb(out, nil)
