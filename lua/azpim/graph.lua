@@ -303,7 +303,7 @@ function M.request(method, url, body, cb)
       fh:close()
       vim.list_extend(args, { "-H", "Content-Type: application/json", "--data-binary", "@" .. path })
     end
-    curl(args, function(data, cerr)
+    curl(args, function(data, cerr, status)
       if path then
         os.remove(path)
       end
@@ -312,6 +312,12 @@ function M.request(method, url, body, cb)
       end
       if data.error then
         return cb(nil, graph_error(data))
+      end
+      -- Graph normally sends `{"error":{…}}`, but a throttle/gateway failure can
+      -- come back as a bare 429/503 with a body we'd otherwise read as success.
+      local herr = http.http_error(data, status, "Graph")
+      if herr then
+        return cb(nil, herr)
       end
       cb(data, nil)
     end)

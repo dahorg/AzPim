@@ -21,6 +21,10 @@ local state = {
   rows = {}, -- lnum -> item
   selected = {}, -- key -> true
   cfg = nil,
+  generation = 0, -- refresh counter; responses from older refreshes are dropped
+  pending = {}, -- requests submitted but not yet visible in Azure
+  poll_attempt = 0,
+  poll_armed = false,
 }
 
 local SPINNER_FRAMES = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
@@ -234,6 +238,10 @@ function render()
   section("ACTIVE — Azure resources", state.active, "azure", true, "azure_active")
   section("ACTIVE — Entra ID roles", state.active, "entra", true, "entra_active")
 
+  if #state.pending > 0 then
+    add(string.format("  waiting on Azure for %d request(s)…", #state.pending), "AzPimHint")
+  end
+
   local n = #selected_items()
   if n > 0 then
     add(string.format("  %d selected — press 'a' to activate", n), "AzPimHint")
@@ -279,8 +287,18 @@ end
 -- data loading
 -- ---------------------------------------------------------------------------
 
+--- Defined below; called at the end of every refresh that wasn't superseded.
+local evaluate_pending
+
 ---@param on_done fun()|nil called once every section has settled
 function M.refresh(on_done)
+  -- Every refresh gets a generation. A refresh started while another is still
+  -- in flight (the poll loop below, or 'r' pressed twice) used to let the older
+  -- refresh's five callbacks append into the tables the newer one had just
+  -- cleared, and let its on_done fire against a half-built list — so a role
+  -- could be judged activated, or not activated, from someone else's data.
+  state.generation = state.generation + 1
+  local gen = state.generation
   state.loading = true
   state.errors = {}
   state.hint = nil
@@ -300,18 +318,27 @@ function M.refresh(on_done)
   -- below finishes, fill in each section as soon as its own call returns.
   local pending = 5
   local function done()
+    if gen ~= state.generation then
+      return -- superseded by a newer refresh
+    end
     pending = pending - 1
     if pending == 0 then
       state.loading = false
+      render()
+      evaluate_pending()
       if on_done then
         on_done()
       end
+      return
     end
     render()
   end
 
   local function collect(target_key, loading_key, fetch, label)
     fetch(function(items, err)
+      if gen ~= state.generation then
+        return
+      end
       if err then
         if az.is_missing_graph_scope(err) then
           state.hint = az.GRAPH_SCOPE_HINT
@@ -328,7 +355,7 @@ function M.refresh(on_done)
   end
 
   az.account(function(data, err)
-    if not err then
+    if not err and gen == state.generation then
       state.account = data
     end
     done()
@@ -390,37 +417,79 @@ end
 -- short delay. Poll with backoff instead of refreshing once and giving up.
 local POLL_DELAYS_MS = { 2500, 4000, 8000, 15000, 30000 }
 
-local function poll_until_settled(pending, attempt)
-  M.refresh(function()
+local arm_poll
+
+--- Promote the requests Azure has finally caught up on, and keep polling the
+--- rest. Runs after *any* completed refresh (including a manual 'r'), so the
+--- poll loop can't be orphaned by a refresh that supersedes it.
+function evaluate_pending()
+  if #state.pending == 0 then
+    return
+  end
+  if not (state.win and vim.api.nvim_win_is_valid(state.win)) then
+    state.pending, state.poll_attempt = {}, 0
+    return
+  end
+  local still = {}
+  for _, p in ipairs(state.pending) do
+    if settled(p.item, p.action) then
+      notify(("%s: %s"):format(p.action == "activate" and "activated" or "deactivated", p.label))
+    else
+      table.insert(still, p)
+    end
+  end
+  state.pending = still
+  if #still == 0 then
+    state.poll_attempt = 0
+    return
+  end
+  state.poll_attempt = state.poll_attempt + 1
+  local delay = POLL_DELAYS_MS[state.poll_attempt]
+  if not delay then
+    -- Azure accepted the request but never showed the role as active. Say that
+    -- rather than leaving the earlier "submitted" message to imply success.
+    local names = {}
+    for _, p in ipairs(still) do
+      table.insert(names, p.label)
+    end
+    notify(
+      ("Azure accepted the request but these are still not active:\n  %s\nCheck the portal, or press 'r' to look again."):format(
+        table.concat(names, "\n  ")
+      ),
+      vim.log.levels.WARN
+    )
+    state.pending, state.poll_attempt = {}, 0
+    return
+  end
+  arm_poll(delay)
+end
+
+--- One timer at a time, so overlapping submissions can't stack refreshes.
+function arm_poll(delay)
+  if state.poll_armed then
+    return
+  end
+  state.poll_armed = true
+  vim.defer_fn(function()
+    state.poll_armed = false
+    if #state.pending == 0 then
+      return
+    end
     if not (state.win and vim.api.nvim_win_is_valid(state.win)) then
+      state.pending, state.poll_attempt = {}, 0
       return
     end
-    local unsettled = {}
-    for _, p in ipairs(pending) do
-      if not settled(p.item, p.action) then
-        table.insert(unsettled, p)
-      end
-    end
-    if #unsettled == 0 then
+    M.refresh()
+  end, delay)
+end
+
+local function watch(item, action, label)
+  for _, p in ipairs(state.pending) do
+    if p.key == key_of(item) and p.action == action then
       return
     end
-    local delay = POLL_DELAYS_MS[attempt]
-    if not delay then
-      notify(
-        ("still waiting on Azure for %d role%s — press 'r' to check again"):format(
-          #unsettled,
-          #unsettled == 1 and "" or "s"
-        ),
-        vim.log.levels.WARN
-      )
-      return
-    end
-    vim.defer_fn(function()
-      if state.win and vim.api.nvim_win_is_valid(state.win) then
-        poll_until_settled(unsettled, attempt + 1)
-      end
-    end, delay)
-  end)
+  end
+  table.insert(state.pending, { item = item, action = action, label = label, key = key_of(item) })
 end
 
 local function submit(items, action)
@@ -429,20 +498,36 @@ local function submit(items, action)
   end
   with_opts(action, #items, function(opts)
     local left = #items
-    local succeeded = {}
+    local watching = 0
     for _, item in ipairs(items) do
       local label = string.format("%s @ %s", item.role, item.scope)
-      az.dispatch(item, action, opts, function(_, err)
+      az.dispatch(item, action, opts, function(data, err)
         if err then
           notify(("%s %s failed:\n%s"):format(action, label, err), vim.log.levels.ERROR)
         else
-          notify(("%s: %s"):format(action == "activate" and "activated" or "deactivated", label))
-          state.selected[key_of(item)] = nil
-          table.insert(succeeded, { item = item, action = action })
+          -- A 2xx only means PIM recorded the request. Its own status says
+          -- whether the role was actually granted, parked for approval, or
+          -- rejected — announcing "activated" here regardless was how a
+          -- non-activation could look like a success.
+          local outcome, status = az.request_status(data)
+          if outcome == "failed" then
+            notify(("%s %s was rejected by PIM (%s)"):format(action, label, status), vim.log.levels.ERROR)
+          elseif outcome == "approval" then
+            state.selected[key_of(item)] = nil
+            notify(
+              ("%s: %s is waiting for approval (%s) — it is not active yet"):format(action, label, status),
+              vim.log.levels.WARN
+            )
+          else
+            state.selected[key_of(item)] = nil
+            watch(item, action, label)
+            watching = watching + 1
+          end
         end
         left = left - 1
-        if left == 0 and #succeeded > 0 then
-          poll_until_settled(succeeded, 1)
+        if left == 0 and watching > 0 then
+          state.poll_attempt = 0
+          M.refresh()
         end
       end)
     end

@@ -94,9 +94,13 @@ local function get_all(url, cb, acc)
       http.encode_query(url),
       "-H",
       "Authorization: Bearer " .. token,
-    }, function(data, err)
+    }, function(data, err, status)
       if err then
         return cb(nil, err)
+      end
+      local herr = http.http_error(data, status, "ARM")
+      if herr then
+        return cb(nil, herr)
       end
       if data.error then
         return cb(nil, (data.error.message or data.error.code or vim.inspect(data.error)))
@@ -134,10 +138,14 @@ local function send(method, url, body, cb)
       "Content-Type: application/json",
       "--data-binary",
       "@" .. path,
-    }, function(data, err)
+    }, function(data, err, status)
       os.remove(path)
       if err then
         return cb(nil, err)
+      end
+      local herr = http.http_error(data, status, "ARM")
+      if herr then
+        return cb(nil, herr)
       end
       if data.error then
         return cb(nil, (data.error.message or data.error.code or vim.inspect(data.error)))
@@ -147,18 +155,37 @@ local function send(method, url, body, cb)
   end)
 end
 
-local function uuid()
-  local template = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx"
-  return (
-    template:gsub("[xy]", function(c)
-      local v = (c == "x") and math.random(0, 15) or math.random(8, 11)
-      return string.format("%x", v)
-    end)
-  )
+--- Random 16 bytes. `math.random` must not be used for this: LuaJIT's
+--- generator is never seeded, so every Neovim session produces the *same*
+--- sequence — and a PUT to roleAssignmentScheduleRequests under an id that
+--- already exists is a no-op that echoes the earlier request back with a
+--- success status. That is a silent non-activation: the first activation of
+--- a given scope in each session would reuse the previous session's id, be
+--- swallowed by ARM, and still be reported here as "activated".
+local function random_bytes()
+  local ok, bytes = pcall(vim.uv.random, 16)
+  if ok and type(bytes) == "string" and #bytes == 16 then
+    return { bytes:byte(1, 16) }
+  end
+  -- No CSPRNG (shouldn't happen on any supported platform): at least seed the
+  -- fallback per process so ids can't repeat across sessions.
+  math.randomseed(tonumber(tostring(vim.uv.hrtime()):sub(-9)) + os.time())
+  local out = {}
+  for i = 1, 16 do
+    out[i] = math.random(0, 255)
+  end
+  return out
 end
 
-local function now_iso()
-  return os.date("!%Y-%m-%dT%H:%M:%SZ")
+local function uuid()
+  local b = random_bytes()
+  b[7] = (b[7] % 0x10) + 0x40 -- version 4
+  b[9] = (b[9] % 0x40) + 0x80 -- RFC 4122 variant
+  return string.format(
+    "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+    b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8],
+    b[9], b[10], b[11], b[12], b[13], b[14], b[15], b[16]
+  )
 end
 
 --- Object id of the signed-in user. The ARM access token already carries it
@@ -280,8 +307,10 @@ function M.azure_request(item, action, opts, cb)
     }
     if action == "activate" then
       props.linkedRoleEligibilityScheduleId = item.eligibility_id
+      -- No startDateTime: PIM starts the activation immediately when it is
+      -- omitted. Sending our own local clock only risks a few seconds of skew
+      -- landing in the future, which parks the request until then.
       props.scheduleInfo = {
-        startDateTime = now_iso(),
         expiration = { type = "AfterDuration", duration = opts.duration },
       }
       if opts.ticket_number and opts.ticket_number ~= "" then
@@ -391,7 +420,6 @@ function M.entra_request(item, action, opts, cb)
     }
     if action == "activate" then
       body.scheduleInfo = {
-        startDateTime = now_iso(),
         expiration = { type = "afterDuration", duration = opts.duration },
       }
       if opts.ticket_number and opts.ticket_number ~= "" then
@@ -403,6 +431,55 @@ function M.entra_request(item, action, opts, cb)
 end
 
 -- ---------------------------------------------------------------------------
+
+-- A 2xx from roleAssignmentScheduleRequests means "request recorded", not
+-- "role active". PIM reports the outcome in the request's own `status` field,
+-- and it can be an outright rejection or a park-for-approval — both of which
+-- arrive on the happy path with no `error` in the body.
+local REQUEST_FAILED = {
+  Failed = true,
+  FailedAsResourceIsLocked = true,
+  Denied = true,
+  AdminDenied = true,
+  StagedDenied = true,
+  Canceled = true,
+  TimedOut = true,
+  Invalid = true,
+}
+
+local REQUEST_APPROVAL = {
+  PendingApproval = true,
+  PendingApprovalProvisioning = true,
+  PendingAdminDecision = true,
+  PendingExternalProvisioning = true,
+  PendingScheduleCreation = true,
+}
+
+local REQUEST_DONE = {
+  Provisioned = true,
+  Granted = true,
+  Revoked = true,
+}
+
+--- Classify the request object returned by an activate/deactivate call.
+--- ARM nests it under `properties`, Graph puts it at the top level.
+---@return "done"|"approval"|"failed"|"pending" outcome, string|nil status
+function M.request_status(data)
+  local status = data and ((data.properties or {}).status or data.status)
+  if type(status) ~= "string" then
+    return "pending", nil
+  end
+  if REQUEST_FAILED[status] then
+    return "failed", status
+  end
+  if REQUEST_APPROVAL[status] then
+    return "approval", status
+  end
+  if REQUEST_DONE[status] then
+    return "done", status
+  end
+  return "pending", status
+end
 
 --- Graph refuses PIM endpoints unless the caller holds the role-management
 --- scopes. With graph.lua's own token this should not happen; if it does, the
