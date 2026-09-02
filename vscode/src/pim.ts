@@ -19,6 +19,54 @@ export interface RequestOptions {
 
 export class ArmError extends Error {}
 
+// A 2xx from roleAssignmentScheduleRequests means "request recorded", not
+// "role active". PIM reports the outcome in the request's own `status` field,
+// and it can be an outright rejection or a park-for-approval — both of which
+// arrive on the happy path with no `error` in the body.
+const REQUEST_FAILED = new Set([
+  "Failed",
+  "FailedAsResourceIsLocked",
+  "Denied",
+  "AdminDenied",
+  "StagedDenied",
+  "Canceled",
+  "TimedOut",
+  "Invalid",
+]);
+
+const REQUEST_APPROVAL = new Set([
+  "PendingApproval",
+  "PendingApprovalProvisioning",
+  "PendingAdminDecision",
+  "PendingExternalProvisioning",
+  "PendingScheduleCreation",
+]);
+
+const REQUEST_DONE = new Set(["Provisioned", "Granted", "Revoked"]);
+
+export type RequestOutcome = "done" | "approval" | "failed" | "pending";
+
+/**
+ * Classify the request object returned by an activate/deactivate call. ARM
+ * nests it under `properties`, Graph puts it at the top level.
+ */
+export function requestStatus(data: any): { outcome: RequestOutcome; status?: string } {
+  const status = data?.properties?.status ?? data?.status;
+  if (typeof status !== "string") {
+    return { outcome: "pending" };
+  }
+  if (REQUEST_FAILED.has(status)) {
+    return { outcome: "failed", status };
+  }
+  if (REQUEST_APPROVAL.has(status)) {
+    return { outcome: "approval", status };
+  }
+  if (REQUEST_DONE.has(status)) {
+    return { outcome: "done", status };
+  }
+  return { outcome: "pending", status };
+}
+
 async function arm(method: string, url: string, body?: unknown): Promise<any> {
   const token = await armAccessToken();
   const res = await fetch(url, {
@@ -123,7 +171,7 @@ export async function azureActive(): Promise<PimItem[]> {
     });
 }
 
-async function azureRequest(item: PimItem, action: "activate" | "deactivate", opts: RequestOptions): Promise<void> {
+async function azureRequest(item: PimItem, action: "activate" | "deactivate", opts: RequestOptions): Promise<any> {
   const oid = await signedInUser();
   const props: Record<string, unknown> = {
     principalId: oid,
@@ -133,8 +181,10 @@ async function azureRequest(item: PimItem, action: "activate" | "deactivate", op
   };
   if (action === "activate") {
     props.linkedRoleEligibilityScheduleId = item.eligibilityId;
+    // No startDateTime: PIM starts the activation immediately when it is
+    // omitted. Sending our own clock only risks a few seconds of skew landing
+    // in the future, which parks the request until then.
     props.scheduleInfo = {
-      startDateTime: new Date().toISOString(),
       expiration: { type: "AfterDuration", duration: opts.duration },
     };
     if (opts.ticketNumber) {
@@ -148,7 +198,7 @@ async function azureRequest(item: PimItem, action: "activate" | "deactivate", op
     randomUUID() +
     "?api-version=" +
     ARM_API;
-  await arm("put", url, { properties: props });
+  return arm("put", url, { properties: props });
 }
 
 // ---------------------------------------------------------------------------
@@ -209,7 +259,7 @@ async function entraRequest(
   item: PimItem,
   action: "activate" | "deactivate",
   opts: RequestOptions,
-): Promise<void> {
+): Promise<any> {
   const oid = await signedInUser();
   const body: Record<string, unknown> = {
     action: action === "activate" ? "selfActivate" : "selfDeactivate",
@@ -220,14 +270,13 @@ async function entraRequest(
   };
   if (action === "activate") {
     body.scheduleInfo = {
-      startDateTime: new Date().toISOString(),
       expiration: { type: "afterDuration", duration: opts.duration },
     };
     if (opts.ticketNumber) {
       body.ticketInfo = { ticketNumber: opts.ticketNumber, ticketSystem: opts.ticketSystem };
     }
   }
-  await graph.request("post", `${GRAPH}/roleManagement/directory/roleAssignmentScheduleRequests`, body);
+  return graph.request("post", `${GRAPH}/roleManagement/directory/roleAssignmentScheduleRequests`, body);
 }
 
 export function dispatch(
@@ -235,6 +284,6 @@ export function dispatch(
   item: PimItem,
   action: "activate" | "deactivate",
   opts: RequestOptions,
-): Promise<void> {
+): Promise<any> {
   return item.kind === "azure" ? azureRequest(item, action, opts) : entraRequest(graph, item, action, opts);
 }

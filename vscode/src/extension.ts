@@ -2,11 +2,16 @@ import * as vscode from "vscode";
 import { forgetArmToken } from "./cli";
 import { GraphAuth, GraphClient } from "./graph";
 import { PimItem, label } from "./model";
-import { RequestOptions, dispatch } from "./pim";
+import { RequestOptions, dispatch, requestStatus } from "./pim";
 import { Node, PimTreeProvider, RoleNode } from "./tree";
 
-/** Azure needs a moment to provision an activation before it lists it. */
-const SETTLE_MS = 2500;
+// Azure provisions activations asynchronously: the request returns long before
+// roleAssignmentScheduleInstances catches up, and fan-out across subscriptions
+// can take well past a single short delay. Poll with backoff and only call a
+// role activated once Azure actually lists it.
+const POLL_DELAYS_MS = [2500, 4000, 8000, 15000, 30000];
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function activate(context: vscode.ExtensionContext): void {
   const auth = new GraphAuth(context.secrets, context.globalState);
@@ -105,6 +110,9 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     const failures: string[] = [];
+    const rejected: string[] = [];
+    const awaitingApproval: string[] = [];
+    const watching: PimItem[] = [];
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
@@ -116,8 +124,22 @@ export function activate(context: vscode.ExtensionContext): void {
         await Promise.all(
           items.map(async (item) => {
             try {
-              await dispatch(graph, item, action, opts);
+              const data = await dispatch(graph, item, action, opts);
+              // A 2xx only means PIM recorded the request. Its own status says
+              // whether the role was granted, parked for approval, or
+              // rejected — reporting success regardless was how a
+              // non-activation could look like an activation.
+              const { outcome, status } = requestStatus(data);
+              if (outcome === "failed") {
+                rejected.push(`${label(item)} (${status})`);
+                return;
+              }
               provider.setChecked(item, false);
+              if (outcome === "approval") {
+                awaitingApproval.push(`${label(item)} (${status})`);
+                return;
+              }
+              watching.push(item);
             } catch (e) {
               failures.push(`${label(item)}: ${(e as Error).message ?? String(e)}`);
             }
@@ -126,16 +148,64 @@ export function activate(context: vscode.ExtensionContext): void {
       },
     );
 
-    const ok = items.length - failures.length;
-    if (ok > 0) {
-      void vscode.window.showInformationMessage(
-        `Azure PIM: ${action === "activate" ? "activated" : "deactivated"} ${ok} role${ok === 1 ? "" : "s"}.`,
-      );
-    }
     for (const f of failures) {
       void vscode.window.showErrorMessage(`Azure PIM: ${action} failed — ${f}`, { modal: false });
     }
-    setTimeout(() => void provider.refresh(), SETTLE_MS);
+    for (const r of rejected) {
+      void vscode.window.showErrorMessage(`Azure PIM: ${action} was rejected by PIM — ${r}`, { modal: false });
+    }
+    if (awaitingApproval.length > 0) {
+      void vscode.window.showWarningMessage(
+        `Azure PIM: waiting for approval, not active yet — ${awaitingApproval.join(", ")}`,
+      );
+    }
+    if (watching.length > 0) {
+      void confirm(watching, action);
+    } else if (awaitingApproval.length > 0) {
+      void provider.reload();
+    }
+  };
+
+  /** Wait for Azure to actually reflect the requests we submitted. */
+  const confirm = async (items: PimItem[], action: "activate" | "deactivate") => {
+    const want = action === "activate";
+    let pending = items;
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Azure PIM: waiting for Azure to ${want ? "provision" : "revoke"} ${pending.length} role${
+          pending.length === 1 ? "" : "s"
+        }…`,
+      },
+      async () => {
+        for (const delay of POLL_DELAYS_MS) {
+          await sleep(delay);
+          await provider.reload();
+          const still: PimItem[] = [];
+          for (const item of pending) {
+            if (provider.isActive(item) === want) {
+              void vscode.window.showInformationMessage(
+                `Azure PIM: ${want ? "activated" : "deactivated"} ${label(item)}.`,
+              );
+            } else {
+              still.push(item);
+            }
+          }
+          pending = still;
+          if (pending.length === 0) {
+            return;
+          }
+        }
+      },
+    );
+    if (pending.length > 0) {
+      // Say so rather than leaving the progress notification to imply success.
+      void vscode.window.showWarningMessage(
+        `Azure PIM: the request was accepted but ${pending.map(label).join(", ")} ${
+          pending.length === 1 ? "is" : "are"
+        } still ${want ? "not active" : "active"}. Check the Azure portal, or refresh to look again.`,
+      );
+    }
   };
 
   const register = (id: string, fn: (...args: any[]) => unknown) =>

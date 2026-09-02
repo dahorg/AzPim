@@ -272,6 +272,22 @@ export class PimTreeProvider implements vscode.TreeDataProvider<Node> {
     return source.filter((it) => it.kind === section.kind);
   }
 
+  /**
+   * Reload with data guaranteed to be newer than this call. A plain refresh()
+   * may hand back an in-flight load that started before whatever we are trying
+   * to observe — e.g. an activation we have only just submitted.
+   */
+  reload(): Promise<void> {
+    return this.refreshing ? this.refreshing.then(() => this.refresh()) : this.refresh();
+  }
+
+  /** Is this role listed as an active activation right now? */
+  isActive(item: PimItem): boolean {
+    return this.active.some(
+      (a) => a.kind === item.kind && a.roleDefinitionId === item.roleDefinitionId && a.scopeId === item.scopeId,
+    );
+  }
+
   /** Everything currently listed — used to resolve command arguments. */
   allItems(): PimItem[] {
     return [...this.eligible, ...this.active];
