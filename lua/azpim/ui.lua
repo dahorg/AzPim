@@ -599,22 +599,25 @@ end
 -- window
 -- ---------------------------------------------------------------------------
 
--- Border gradient: a two-tone sweep (blue -> purple) across the 8 rounded
--- border segments, since a floating window's border is the one place we can
--- give per-character highlights.
-local BORDER_GRADIENT_FROM = "#7aa2f7"
-local BORDER_GRADIENT_TO = "#bb9af7"
-local BORDER_SEGMENTS = 8
+-- Border gradient: each of the 8 rounded border segments gets its own hue,
+-- since a floating window's border is the one place we can give
+-- per-character highlights. A wide hue sweep (rather than a two-tone one)
+-- so the effect actually reads at a glance instead of blending into one
+-- color on a 1-cell-thick line.
+local BORDER_HUES = {
+	"#7dcfff", -- topleft: cyan
+	"#7aa2f7", -- top: blue
+	"#bb9af7", -- topright: purple
+	"#c678dd", -- right: magenta
+	"#f7768e", -- bottomright: pink
+	"#ff9e64", -- bottom: orange
+	"#e0af68", -- bottomleft: gold
+	"#9ece6a", -- left: green
+}
 
 local function hex_to_rgb(hex)
 	hex = hex:gsub("#", "")
 	return tonumber(hex:sub(1, 2), 16), tonumber(hex:sub(3, 4), 16), tonumber(hex:sub(5, 6), 16)
-end
-
-local function lerp_hex(from, to, t)
-	local r1, g1, b1 = hex_to_rgb(from)
-	local r2, g2, b2 = hex_to_rgb(to)
-	return math.floor(r1 + (r2 - r1) * t + 0.5), math.floor(g1 + (g2 - g1) * t + 0.5), math.floor(b1 + (b2 - b1) * t + 0.5)
 end
 
 -- Nearest xterm-256 color, for terminals/configs without 'termguicolors' set
@@ -642,11 +645,10 @@ local function set_highlights()
 		vim.api.nvim_set_hl(0, name, vim.tbl_extend("keep", def, { default = true }))
 	end
 
-	for i = 1, BORDER_SEGMENTS do
-		local t = (i - 1) / (BORDER_SEGMENTS - 1)
-		local r, g, b = lerp_hex(BORDER_GRADIENT_FROM, BORDER_GRADIENT_TO, t)
+	for i, hex in ipairs(BORDER_HUES) do
+		local r, g, b = hex_to_rgb(hex)
 		vim.api.nvim_set_hl(0, "AzPimBorder" .. i, {
-			fg = string.format("#%02x%02x%02x", r, g, b),
+			fg = hex,
 			ctermfg = rgb_to_cterm256(r, g, b),
 		})
 	end
