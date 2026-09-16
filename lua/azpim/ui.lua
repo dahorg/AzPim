@@ -614,12 +614,17 @@ end
 local function lerp_hex(from, to, t)
 	local r1, g1, b1 = hex_to_rgb(from)
 	local r2, g2, b2 = hex_to_rgb(to)
-	return string.format(
-		"#%02x%02x%02x",
-		math.floor(r1 + (r2 - r1) * t + 0.5),
-		math.floor(g1 + (g2 - g1) * t + 0.5),
-		math.floor(b1 + (b2 - b1) * t + 0.5)
-	)
+	return math.floor(r1 + (r2 - r1) * t + 0.5), math.floor(g1 + (g2 - g1) * t + 0.5), math.floor(b1 + (b2 - b1) * t + 0.5)
+end
+
+-- Nearest xterm-256 color, for terminals/configs without 'termguicolors' set
+-- (guifg alone is silently ignored then, collapsing the gradient to one color).
+local function rgb_to_cterm256(r, g, b)
+	local function to6(v)
+		return v < 48 and 0 or v < 115 and 1 or math.floor((v - 35) / 40)
+	end
+	local qr, qg, qb = to6(r), to6(g), to6(b)
+	return 16 + 36 * qr + 6 * qg + qb
 end
 
 local function set_highlights()
@@ -639,7 +644,11 @@ local function set_highlights()
 
 	for i = 1, BORDER_SEGMENTS do
 		local t = (i - 1) / (BORDER_SEGMENTS - 1)
-		vim.api.nvim_set_hl(0, "AzPimBorder" .. i, { fg = lerp_hex(BORDER_GRADIENT_FROM, BORDER_GRADIENT_TO, t) })
+		local r, g, b = lerp_hex(BORDER_GRADIENT_FROM, BORDER_GRADIENT_TO, t)
+		vim.api.nvim_set_hl(0, "AzPimBorder" .. i, {
+			fg = string.format("#%02x%02x%02x", r, g, b),
+			ctermfg = rgb_to_cterm256(r, g, b),
+		})
 	end
 end
 
