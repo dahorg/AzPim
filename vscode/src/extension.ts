@@ -113,6 +113,12 @@ export function activate(context: vscode.ExtensionContext): void {
     const rejected: string[] = [];
     const awaitingApproval: string[] = [];
     const watching: PimItem[] = [];
+    // Uncheck as soon as the requests go out, not when Azure answers, so the
+    // tree is free for the next pick while these are still in flight. Items
+    // whose request never reached PIM get their check back below.
+    for (const item of items) {
+      provider.setChecked(item, false);
+    }
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
@@ -131,16 +137,17 @@ export function activate(context: vscode.ExtensionContext): void {
               // non-activation could look like an activation.
               const { outcome, status } = requestStatus(data);
               if (outcome === "failed") {
+                provider.setChecked(item, true);
                 rejected.push(`${label(item)} (${status})`);
                 return;
               }
-              provider.setChecked(item, false);
               if (outcome === "approval") {
                 awaitingApproval.push(`${label(item)} (${status})`);
                 return;
               }
               watching.push(item);
             } catch (e) {
+              provider.setChecked(item, true);
               failures.push(`${label(item)}: ${(e as Error).message ?? String(e)}`);
             }
           }),

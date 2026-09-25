@@ -145,6 +145,18 @@ end
 -- rendering
 -- ---------------------------------------------------------------------------
 
+--- The action already in flight for this item, if any. Rows stay visible in
+--- their old section until Azure catches up, so they need a marker of their
+--- own — otherwise a submitted role is indistinguishable from an untouched one.
+local function pending_for(item)
+	local k = key_of(item)
+	for _, p in ipairs(state.pending) do
+		if p.key == k then
+			return p.action
+		end
+	end
+end
+
 local function selected_items()
 	local out = {}
 	for _, it in ipairs(state.eligible) do
@@ -220,15 +232,24 @@ function render()
 			end
 		end
 		for _, it in ipairs(subset) do
+			local waiting = pending_for(it)
 			local prefix
 			if is_active then
-				prefix = "  ● "
+				prefix = waiting and "  ○ " or "  ● "
+			elseif waiting then
+				prefix = "  [~] "
 			else
 				prefix = state.selected[key_of(it)] and "  [x] " or "  [ ] "
 			end
-			local extra = is_active and remaining(it) or (it.member_type == "Group" and "via group" or "")
+			local extra
+			if waiting then
+				extra = waiting == "activate" and "activating…" or "deactivating…"
+			else
+				extra = is_active and remaining(it) or (it.member_type == "Group" and "via group" or "")
+			end
 			local line = prefix .. pad(it.role, 38) .. " " .. pad(it.scope, 34) .. " " .. extra
-			local lnum = add(line:gsub("%s+$", ""), is_active and "AzPimActive" or nil)
+			local hl = waiting and "AzPimHint" or (is_active and "AzPimActive" or nil)
+			local lnum = add(line:gsub("%s+$", ""), hl)
 			state.rows[lnum] = it
 		end
 		add("")
@@ -504,10 +525,19 @@ local function submit(items, action)
 	with_opts(action, #items, function(opts)
 		local left = #items
 		local watching = 0
+		-- Drop the selection as soon as the requests go out, not when Azure
+		-- answers: the list is then free for the next pick while these are still
+		-- in flight. A request that never reaches PIM puts its row back.
+		for _, item in ipairs(items) do
+			state.selected[key_of(item)] = nil
+		end
+		render()
 		for _, item in ipairs(items) do
 			local label = string.format("%s @ %s", item.role, item.scope)
 			az.dispatch(item, action, opts, function(data, err)
 				if err then
+					state.selected[key_of(item)] = true
+					render()
 					notify(("%s %s failed:\n%s"):format(action, label, err), vim.log.levels.ERROR)
 				else
 					-- A 2xx only means PIM recorded the request. Its own status says
@@ -516,9 +546,10 @@ local function submit(items, action)
 					-- non-activation could look like a success.
 					local outcome, status = az.request_status(data)
 					if outcome == "failed" then
+						state.selected[key_of(item)] = true
+						render()
 						notify(("%s %s was rejected by PIM (%s)"):format(action, label, status), vim.log.levels.ERROR)
 					elseif outcome == "approval" then
-						state.selected[key_of(item)] = nil
 						notify(
 							("%s: %s is waiting for approval (%s) — it is not active yet"):format(
 								action,
@@ -528,7 +559,6 @@ local function submit(items, action)
 							vim.log.levels.WARN
 						)
 					else
-						state.selected[key_of(item)] = nil
 						watch(item, action, label)
 						watching = watching + 1
 					end
