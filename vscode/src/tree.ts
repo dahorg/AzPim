@@ -5,7 +5,7 @@ import * as vscode from "vscode";
 import { Account, account } from "./cli";
 import { DeviceCode, GRAPH_SCOPE_HINT, GraphClient, GraphError } from "./graph";
 import { Kind, PimItem, State, keyOf, remaining, sortItems } from "./model";
-import { azureActive, azureEligible, entraActive, entraEligible } from "./pim";
+import { azureActive, azureEligible, entraActive, entraEligible, groupActive, groupEligible } from "./pim";
 
 export interface SectionNode {
   type: "section";
@@ -37,6 +37,8 @@ const SECTIONS: SectionNode[] = [
   { type: "section", id: "eligible-entra", title: "Eligible — Entra ID roles", kind: "entra", state: "eligible" },
   { type: "section", id: "active-azure", title: "Active — Azure resources", kind: "azure", state: "active" },
   { type: "section", id: "active-entra", title: "Active — Entra ID roles", kind: "entra", state: "active" },
+  { type: "section", id: "eligible-group", title: "Eligible — PIM groups", kind: "group", state: "eligible" },
+  { type: "section", id: "active-group", title: "Active — PIM groups", kind: "group", state: "active" },
 ];
 
 export class PimTreeProvider implements vscode.TreeDataProvider<Node> {
@@ -120,6 +122,8 @@ export class PimTreeProvider implements vscode.TreeDataProvider<Node> {
         ? [
             collect(eligible, "entra eligible", () => entraEligible(this.graph)),
             collect(active, "entra active", () => entraActive(this.graph)),
+            collect(eligible, "group eligible", () => groupEligible(this.graph)),
+            collect(active, "group active", () => groupActive(this.graph)),
           ]
         : []),
     ]);
@@ -175,7 +179,7 @@ export class PimTreeProvider implements vscode.TreeDataProvider<Node> {
   getChildren(node?: Node): Node[] {
     if (!node) {
       const wantEntra = vscode.workspace.getConfiguration("azpim").get<boolean>("showEntraRoles", true);
-      return SECTIONS.filter((s) => wantEntra || s.kind !== "entra");
+      return SECTIONS.filter((s) => wantEntra || s.kind === "azure");
     }
     if (node.type !== "section") {
       return [];
@@ -184,7 +188,7 @@ export class PimTreeProvider implements vscode.TreeDataProvider<Node> {
     if (items.length > 0) {
       return items.map((item) => ({ type: "role", item }) satisfies RoleNode);
     }
-    if (node.kind === "entra" && this.entraNeedsSignIn) {
+    if (node.kind !== "azure" && this.entraNeedsSignIn) {
       return [
         {
           type: "action",
@@ -257,7 +261,9 @@ export class PimTreeProvider implements vscode.TreeDataProvider<Node> {
     if (item.scopeType) {
       md.appendMarkdown(`- Scope type: ${item.scopeType}\n`);
     }
-    md.appendMarkdown(`- Source: ${item.kind === "azure" ? "Azure resources" : "Entra ID"}\n`);
+    md.appendMarkdown(
+      `- Source: ${item.kind === "azure" ? "Azure resources" : item.kind === "group" ? "PIM group" : "Entra ID"}\n`,
+    );
     if (item.memberType) {
       md.appendMarkdown(`- Held: ${item.memberType === "Group" ? "through group membership" : "directly"}\n`);
     }
@@ -284,7 +290,11 @@ export class PimTreeProvider implements vscode.TreeDataProvider<Node> {
   /** Is this role listed as an active activation right now? */
   isActive(item: PimItem): boolean {
     return this.active.some(
-      (a) => a.kind === item.kind && a.roleDefinitionId === item.roleDefinitionId && a.scopeId === item.scopeId,
+      (a) =>
+        a.kind === item.kind &&
+        a.roleDefinitionId === item.roleDefinitionId &&
+        a.accessId === item.accessId &&
+        a.scopeId === item.scopeId,
     );
   }
 

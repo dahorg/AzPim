@@ -1,7 +1,7 @@
 // Shared shape of a PIM role row, plus the small bits of formatting the tree
 // and the quick pick both need.
 
-export type Kind = "azure" | "entra";
+export type Kind = "azure" | "entra" | "group";
 export type State = "eligible" | "active";
 
 export interface PimItem {
@@ -14,7 +14,10 @@ export interface PimItem {
   scopeType?: string;
   /** ARM resource id, or a Graph directory scope such as "/". */
   scopeId: string;
-  roleDefinitionId: string;
+  /** Absent on PIM-for-Groups rows, which have no role definition. */
+  roleDefinitionId?: string;
+  /** PIM-for-Groups: "member" or "owner". */
+  accessId?: string;
   /** Set on eligibilities; ARM activations must link back to it. */
   eligibilityId?: string;
   /** "Group" when the eligibility is held through group membership. */

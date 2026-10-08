@@ -1,4 +1,5 @@
 -- Floating-window UI: eligible roles on top, active activations below.
+-- Three kinds of row: Azure resource roles, Entra ID roles, PIM-for-Groups.
 local az = require("azpim.az")
 local graph = require("azpim.graph")
 
@@ -11,7 +12,7 @@ local state = {
 	buf = nil,
 	win = nil,
 	loading = false,
-	loading_sections = {}, -- "azure_eligible"|"azure_active"|"entra_eligible"|"entra_active" -> true
+	loading_sections = {}, -- "azure_eligible"|"azure_active"|"entra_eligible"|"entra_active"|"group_eligible"|"group_active" -> true
 	account = nil,
 	eligible = {}, -- azpim.Item[]
 	active = {}, -- azpim.Item[]
@@ -257,8 +258,10 @@ function render()
 
 	section("ELIGIBLE — Azure resources", state.eligible, "azure", false, "azure_eligible")
 	section("ELIGIBLE — Entra ID roles", state.eligible, "entra", false, "entra_eligible")
+	section("ELIGIBLE — PIM groups", state.eligible, "group", false, "group_eligible")
 	section("ACTIVE — Azure resources", state.active, "azure", true, "azure_active")
 	section("ACTIVE — Entra ID roles", state.active, "entra", true, "entra_active")
+	section("ACTIVE — PIM groups", state.active, "group", true, "group_active")
 
 	if #state.pending > 0 then
 		add(string.format("  waiting on Azure for %d request(s)…", #state.pending), "AzPimHint")
@@ -330,6 +333,8 @@ function M.refresh(on_done)
 		azure_active = true,
 		entra_eligible = true,
 		entra_active = true,
+		group_eligible = true,
+		group_active = true,
 	}
 	ensure_spinner()
 	render()
@@ -338,7 +343,7 @@ function M.refresh(on_done)
 	-- fan out across subscriptions (Azure-side, not something we can speed
 	-- up). Rather than blank the window until every one of the 5 requests
 	-- below finishes, fill in each section as soon as its own call returns.
-	local pending = 5
+	local pending = 7
 	local function done()
 		if gen ~= state.generation then
 			return -- superseded by a newer refresh
@@ -386,6 +391,8 @@ function M.refresh(on_done)
 	collect("active", "azure_active", az.azure_active, "azure active")
 	collect("eligible", "entra_eligible", az.entra_eligible, "entra eligible")
 	collect("active", "entra_active", az.entra_active, "entra active")
+	collect("eligible", "group_eligible", az.group_eligible, "group eligible")
+	collect("active", "group_active", az.group_active, "group active")
 end
 
 -- ---------------------------------------------------------------------------
@@ -429,6 +436,7 @@ local function settled(item, action)
 			active.kind == item.kind
 			and active.role_definition_id == item.role_definition_id
 			and active.scope_id == item.scope_id
+			and active.access_id == item.access_id
 		then
 			found = true
 			break

@@ -431,6 +431,94 @@ function M.entra_request(item, action, opts, cb)
 end
 
 -- ---------------------------------------------------------------------------
+-- PIM for Groups (Microsoft Graph)
+-- ---------------------------------------------------------------------------
+
+local GROUP_PIM = GRAPH .. "/identityGovernance/privilegedAccess/group"
+
+local function group_url(collection, oid)
+  return GROUP_PIM .. "/" .. collection .. "?$filter=principalId eq '" .. oid .. "'&$expand=group"
+end
+
+--- Rows read "Member @ <group name>", mirroring the portal's Role/Group columns.
+local function group_item(it, state)
+  local access = it.accessId or "member"
+  return {
+    kind = "group",
+    state = state,
+    role = access:sub(1, 1):upper() .. access:sub(2),
+    scope = (it.group or {}).displayName or it.groupId,
+    scope_id = it.groupId,
+    access_id = access,
+    member_type = it.memberType,
+    end_time = it.endDateTime,
+  }
+end
+
+function M.group_eligible(cb)
+  M.signed_in_user(function(oid, err)
+    if err then
+      return cb(nil, err)
+    end
+    graph.get_all(group_url("eligibilityScheduleInstances", oid), function(items, gerr)
+      if gerr then
+        return cb(nil, gerr)
+      end
+      local out = {}
+      for _, it in ipairs(items) do
+        table.insert(out, group_item(it, "eligible"))
+      end
+      cb(out, nil)
+    end)
+  end)
+end
+
+function M.group_active(cb)
+  M.signed_in_user(function(oid, err)
+    if err then
+      return cb(nil, err)
+    end
+    graph.get_all(group_url("assignmentScheduleInstances", oid), function(items, gerr)
+      if gerr then
+        return cb(nil, gerr)
+      end
+      local out = {}
+      for _, it in ipairs(items) do
+        -- Only PIM activations, not standing ("Assigned") memberships.
+        if it.assignmentType == "Activated" then
+          table.insert(out, group_item(it, "active"))
+        end
+      end
+      cb(out, nil)
+    end)
+  end)
+end
+
+function M.group_request(item, action, opts, cb)
+  M.signed_in_user(function(oid, err)
+    if err then
+      return cb(nil, err)
+    end
+    local body = {
+      accessId = item.access_id,
+      principalId = oid,
+      groupId = item.scope_id,
+      action = action == "activate" and "selfActivate" or "selfDeactivate",
+      justification = opts.justification,
+    }
+    if action == "activate" then
+      body.scheduleInfo = {
+        expiration = { type = "afterDuration", duration = opts.duration },
+      }
+      if opts.ticket_number and opts.ticket_number ~= "" then
+        body.ticketInfo = { ticketNumber = opts.ticket_number, ticketSystem = opts.ticket_system }
+      end
+    end
+    graph.request("post", GROUP_PIM .. "/assignmentScheduleRequests", body, cb)
+  end)
+end
+
+-- ---------------------------------------------------------------------------
 
 -- A 2xx from roleAssignmentScheduleRequests means "request recorded", not
 -- "role active". PIM reports the outcome in the request's own `status` field,
@@ -498,6 +586,8 @@ M.GRAPH_SCOPE_HINT = table.concat({
 function M.dispatch(item, action, opts, cb)
   if item.kind == "azure" then
     M.azure_request(item, action, opts, cb)
+  elseif item.kind == "group" then
+    M.group_request(item, action, opts, cb)
   else
     M.entra_request(item, action, opts, cb)
   end

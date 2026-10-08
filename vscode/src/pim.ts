@@ -279,11 +279,85 @@ async function entraRequest(
   return graph.request("post", `${GRAPH}/roleManagement/directory/roleAssignmentScheduleRequests`, body);
 }
 
+// ---------------------------------------------------------------------------
+// PIM for Groups (Microsoft Graph)
+// ---------------------------------------------------------------------------
+
+const GROUP_PIM = `${GRAPH}/identityGovernance/privilegedAccess/group`;
+
+function groupUrl(collection: string, oid: string): string {
+  return `${GROUP_PIM}/${collection}?$filter=${encodeURIComponent(`principalId eq '${oid}'`)}&$expand=group`;
+}
+
+/** Rows read "Member @ <group name>", mirroring the portal's Role/Group columns. */
+function groupItem(it: any, state: "eligible" | "active"): PimItem {
+  const access: string = it.accessId ?? "member";
+  return {
+    kind: "group",
+    state,
+    role: access.charAt(0).toUpperCase() + access.slice(1),
+    scope: it.group?.displayName ?? it.groupId,
+    scopeId: it.groupId,
+    accessId: access,
+    memberType: it.memberType,
+    endTime: it.endDateTime ?? undefined,
+  };
+}
+
+export async function groupEligible(graph: GraphClient): Promise<PimItem[]> {
+  const oid = await signedInUser();
+  const items = await graph.getAll(groupUrl("eligibilityScheduleInstances", oid));
+  return items.map((it) => groupItem(it, "eligible"));
+}
+
+export async function groupActive(graph: GraphClient): Promise<PimItem[]> {
+  const oid = await signedInUser();
+  const items = await graph.getAll(groupUrl("assignmentScheduleInstances", oid));
+  return (
+    items
+      // Only PIM activations, not standing ("Assigned") memberships.
+      .filter((it) => it.assignmentType === "Activated")
+      .map((it) => groupItem(it, "active"))
+  );
+}
+
+async function groupRequest(
+  graph: GraphClient,
+  item: PimItem,
+  action: "activate" | "deactivate",
+  opts: RequestOptions,
+): Promise<any> {
+  const oid = await signedInUser();
+  const body: Record<string, unknown> = {
+    accessId: item.accessId,
+    principalId: oid,
+    groupId: item.scopeId,
+    action: action === "activate" ? "selfActivate" : "selfDeactivate",
+    justification: opts.justification,
+  };
+  if (action === "activate") {
+    body.scheduleInfo = {
+      expiration: { type: "afterDuration", duration: opts.duration },
+    };
+    if (opts.ticketNumber) {
+      body.ticketInfo = { ticketNumber: opts.ticketNumber, ticketSystem: opts.ticketSystem };
+    }
+  }
+  return graph.request("post", `${GROUP_PIM}/assignmentScheduleRequests`, body);
+}
+
 export function dispatch(
   graph: GraphClient,
   item: PimItem,
   action: "activate" | "deactivate",
   opts: RequestOptions,
 ): Promise<any> {
-  return item.kind === "azure" ? azureRequest(item, action, opts) : entraRequest(graph, item, action, opts);
+  switch (item.kind) {
+    case "azure":
+      return azureRequest(item, action, opts);
+    case "group":
+      return groupRequest(graph, item, action, opts);
+    default:
+      return entraRequest(graph, item, action, opts);
+  }
 }

@@ -1,7 +1,7 @@
 # AzPim
 
-Activate Azure PIM roles — both **Azure resource** roles and **Entra ID
-(directory)** roles — without leaving your editor.
+Activate Azure PIM roles — **Azure resource** roles, **Entra ID**
+(directory) roles and **PIM groups** — without leaving your editor.
 
 | Client | Lives in | Docs |
 | --- | --- | --- |
@@ -120,7 +120,7 @@ for that app** — often `Directory.ReadWrite.All`, `Sites.FullControl.All` and
 dozens more. The cached credential can therefore mint broadly privileged tokens.
 
 Registering a dedicated public client fixes that: the token then carries only
-the three PIM scopes. All three are admin-consent-only, so a Global Admin (or
+the five PIM scopes. All five are admin-consent-only, so a Global Admin (or
 Privileged Role Administrator) runs this once:
 
 ```sh
@@ -128,7 +128,9 @@ cat > perms.json <<'JSON'
 [{"resourceAppId":"00000003-0000-0000-c000-000000000000","resourceAccess":[
   {"id":"eb0788c2-6d4e-4658-8c9e-c0fb8053f03d","type":"Scope"},
   {"id":"8c026be3-8e26-4774-9372-8d5d6f21daff","type":"Scope"},
-  {"id":"741c54c3-0c1e-44a1-818b-3f97ab4e8c83","type":"Scope"}]}]
+  {"id":"741c54c3-0c1e-44a1-818b-3f97ab4e8c83","type":"Scope"},
+  {"id":"8f44f93d-ecef-46ae-a9bf-338508d44d6b","type":"Scope"},
+  {"id":"06dbc45d-6708-4ef0-a797-f797ee68bf4b","type":"Scope"}]}]
 JSON
 
 APP=$(az ad app create --display-name "AzPim" \
@@ -152,6 +154,8 @@ Then point the client at it and forget the cached sign-in once:
 | `RoleEligibilitySchedule.Read.Directory` | `eb0788c2-6d4e-4658-8c9e-c0fb8053f03d` |
 | `RoleAssignmentSchedule.ReadWrite.Directory` | `8c026be3-8e26-4774-9372-8d5d6f21daff` |
 | `RoleManagement.Read.Directory` | `741c54c3-0c1e-44a1-818b-3f97ab4e8c83` |
+| `PrivilegedEligibilitySchedule.Read.AzureADGroup` | `8f44f93d-ecef-46ae-a9bf-338508d44d6b` |
+| `PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup` | `06dbc45d-6708-4ef0-a797-f797ee68bf4b` |
 
 ---
 
@@ -187,6 +191,9 @@ either way.
 | Entra eligible | `GET /roleManagement/directory/roleEligibilityScheduleInstances` |
 | Entra active | `GET /roleManagement/directory/roleAssignmentScheduleInstances` |
 | Entra (de)activate | `POST /roleManagement/directory/roleAssignmentScheduleRequests` |
+| Group eligible | `GET /identityGovernance/privilegedAccess/group/eligibilityScheduleInstances` |
+| Group active | `GET /identityGovernance/privilegedAccess/group/assignmentScheduleInstances` |
+| Group (de)activate | `POST /identityGovernance/privilegedAccess/group/assignmentScheduleRequests` |
 
 ## Repository layout
 

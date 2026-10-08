@@ -25,6 +25,8 @@ local SCOPES = {
   "https://graph.microsoft.com/RoleEligibilitySchedule.Read.Directory",
   "https://graph.microsoft.com/RoleAssignmentSchedule.ReadWrite.Directory",
   "https://graph.microsoft.com/RoleManagement.Read.Directory",
+  "https://graph.microsoft.com/PrivilegedEligibilitySchedule.Read.AzureADGroup",
+  "https://graph.microsoft.com/PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup",
   "offline_access",
 }
 

@@ -1,7 +1,7 @@
 # Azure PIM for VS Code
 
-Activate Azure PIM roles — both **Azure resource** roles and **Entra ID
-(directory)** roles — from the sidebar. A port of the Neovim plugin in the
+Activate Azure PIM roles — **Azure resource** roles, **Entra ID**
+(directory) roles and **PIM groups** — from the sidebar. A port of the Neovim plugin in the
 parent directory; same endpoints, same semantics, VS Code-native UI.
 
 ![The Azure PIM sidebar: eligible roles with checkboxes, live activations below](../docs/vscode-sidebar.png)
@@ -52,7 +52,7 @@ So the Entra sections start collapsed behind a **Sign in to Microsoft Graph…**
 row; nothing pops a browser until you click it. With `azpim.entraAuth` at its
 default `auto` the extension then:
 
-1. asks VS Code's built-in Microsoft account provider for the three PIM scopes;
+1. asks VS Code's built-in Microsoft account provider for the five PIM scopes;
 2. if that account provider is refused them, falls back to its own device-code
    sign-in — it copies the code to your clipboard and opens the verification
    page.
@@ -72,7 +72,7 @@ has ever consented for that app** — often `Directory.ReadWrite.All`,
 `Sites.FullControl.All` and dozens more.
 
 Registering a dedicated public client fixes that: the token then carries only
-the three PIM scopes. All three are admin-consent-only, so a Global Admin (or
+the five PIM scopes. All five are admin-consent-only, so a Global Admin (or
 Privileged Role Administrator) runs this once:
 
 ```sh
@@ -80,7 +80,9 @@ cat > perms.json <<'JSON'
 [{"resourceAppId":"00000003-0000-0000-c000-000000000000","resourceAccess":[
   {"id":"eb0788c2-6d4e-4658-8c9e-c0fb8053f03d","type":"Scope"},
   {"id":"8c026be3-8e26-4774-9372-8d5d6f21daff","type":"Scope"},
-  {"id":"741c54c3-0c1e-44a1-818b-3f97ab4e8c83","type":"Scope"}]}]
+  {"id":"741c54c3-0c1e-44a1-818b-3f97ab4e8c83","type":"Scope"},
+  {"id":"8f44f93d-ecef-46ae-a9bf-338508d44d6b","type":"Scope"},
+  {"id":"06dbc45d-6708-4ef0-a797-f797ee68bf4b","type":"Scope"}]}]
 JSON
 
 APP=$(az ad app create --display-name "AzPim" \
@@ -101,6 +103,8 @@ provider (as its `VSCODE_CLIENT_ID` scope), so both paths use your registration.
 | `RoleEligibilitySchedule.Read.Directory` | `eb0788c2-6d4e-4658-8c9e-c0fb8053f03d` |
 | `RoleAssignmentSchedule.ReadWrite.Directory` | `8c026be3-8e26-4774-9372-8d5d6f21daff` |
 | `RoleManagement.Read.Directory` | `741c54c3-0c1e-44a1-818b-3f97ab4e8c83` |
+| `PrivilegedEligibilitySchedule.Read.AzureADGroup` | `8f44f93d-ecef-46ae-a9bf-338508d44d6b` |
+| `PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup` | `06dbc45d-6708-4ef0-a797-f797ee68bf4b` |
 
 ## Settings
 
@@ -153,6 +157,9 @@ the extension's own Graph token.
 | Entra eligible | `GET /roleManagement/directory/roleEligibilityScheduleInstances` |
 | Entra active | `GET /roleManagement/directory/roleAssignmentScheduleInstances` |
 | Entra (de)activate | `POST /roleManagement/directory/roleAssignmentScheduleRequests` |
+| Group eligible | `GET /identityGovernance/privilegedAccess/group/eligibilityScheduleInstances` |
+| Group active | `GET /identityGovernance/privilegedAccess/group/assignmentScheduleInstances` |
+| Group (de)activate | `POST /identityGovernance/privilegedAccess/group/assignmentScheduleRequests` |
 
 ## Developing
 
