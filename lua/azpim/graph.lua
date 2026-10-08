@@ -75,6 +75,12 @@ local function load_cache()
     session.access_token = data.access_token
     session.expires_at = tonumber(data.expires_at) or 0
     session.refresh_token = data.refresh_token
+    -- The cached access token only carries the scopes it was issued with. If we
+    -- have since started asking for more, drop it so the refresh token mints a
+    -- new one with the full list.
+    if data.scopes ~= table.concat(SCOPES, " ") then
+      session.access_token, session.expires_at = nil, 0
+    end
   end
 end
 
@@ -90,6 +96,7 @@ local function save_cache()
       access_token = session.access_token,
       expires_at = session.expires_at,
       refresh_token = session.refresh_token,
+      scopes = table.concat(SCOPES, " "),
     })
   )
   vim.uv.fs_close(fd)
