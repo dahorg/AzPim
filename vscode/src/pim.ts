@@ -137,38 +137,52 @@ export async function azureEligible(): Promise<PimItem[]> {
   });
 }
 
+/**
+ * Active activations, found by asking each *eligible* scope rather than the
+ * tenant root. `asTarget()` at the root makes ARM fan out across every
+ * subscription and takes ~20s; an activation always lives at the scope it was
+ * made eligible at, so one small query per eligible scope, run in parallel,
+ * finds the same set in a few seconds.
+ */
 export async function azureActive(): Promise<PimItem[]> {
-  const items = await armGetAll(
-    `${ARM}/providers/Microsoft.Authorization/roleAssignmentScheduleInstances${AS_TARGET}`,
+  const eligible = await azureEligible();
+  const scopes = [...new Set(eligible.map((e) => e.scopeId))];
+  const pages = await Promise.all(
+    scopes.map((scope) =>
+      armGetAll(`${ARM}${scope}/providers/Microsoft.Authorization/roleAssignmentScheduleInstances${AS_TARGET}`),
+    ),
   );
   const seen = new Set<string>();
-  return items
-    // Only PIM activations, not standing/permanent assignments.
-    .filter((it) => (it.properties ?? {}).assignmentType === "Activated")
-    .map((it) => {
-      const p = it.properties ?? {};
-      const ex = p.expandedProperties ?? {};
-      return {
-        kind: "azure",
-        state: "active",
-        role: ex.roleDefinition?.displayName ?? p.roleDefinitionId,
-        scope: ex.scope?.displayName ?? p.scope,
-        scopeType: ex.scope?.type,
-        scopeId: p.scope,
-        roleDefinitionId: p.roleDefinitionId,
-        eligibilityId: p.linkedRoleEligibilityScheduleId,
-        memberType: p.memberType,
-        endTime: p.endDateTime ?? undefined,
-      } satisfies PimItem;
-    })
-    // The same activation can be reported once per inherited group path;
-    // collapse those down to a single row per role+scope.
-    .filter((item) => {
-      const key = `${item.scopeId}|${item.roleDefinitionId}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+  return (
+    pages
+      .flat()
+      // Only PIM activations, not standing/permanent assignments.
+      .filter((it) => (it.properties ?? {}).assignmentType === "Activated")
+      .map((it) => {
+        const p = it.properties ?? {};
+        const ex = p.expandedProperties ?? {};
+        return {
+          kind: "azure",
+          state: "active",
+          role: ex.roleDefinition?.displayName ?? p.roleDefinitionId,
+          scope: ex.scope?.displayName ?? p.scope,
+          scopeType: ex.scope?.type,
+          scopeId: p.scope,
+          roleDefinitionId: p.roleDefinitionId,
+          eligibilityId: p.linkedRoleEligibilityScheduleId,
+          memberType: p.memberType,
+          endTime: p.endDateTime ?? undefined,
+        } satisfies PimItem;
+      })
+      // The same activation can be reported once per inherited group path, and
+      // again by every child scope queried; keep a single row per role+scope.
+      .filter((item) => {
+        const key = `${item.scopeId}|${item.roleDefinitionId}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+  );
 }
 
 async function azureRequest(item: PimItem, action: "activate" | "deactivate", opts: RequestOptions): Promise<any> {

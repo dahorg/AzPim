@@ -254,43 +254,78 @@ function M.azure_eligible(cb)
   end)
 end
 
+--- Active activations, found by asking each *eligible* scope rather than the
+--- tenant root. `asTarget()` at the root makes ARM fan out across every
+--- subscription and takes ~20s; an activation always lives at the scope it was
+--- made eligible at, so one small query per eligible scope, run in parallel,
+--- finds the same set in a few seconds.
 function M.azure_active(cb)
-  local url = ARM
-    .. "/providers/Microsoft.Authorization/roleAssignmentScheduleInstances?api-version="
-    .. ARM_API
-    .. "&$filter=asTarget()"
-  get_all(url, function(items, err)
+  M.azure_eligible(function(eligible, err)
     if err then
       return cb(nil, err)
     end
-    local out = {}
-    local seen = {}
-    for _, it in ipairs(items) do
-      local p = it.properties or {}
-      -- Only PIM activations, not standing/permanent assignments.
-      if p.assignmentType == "Activated" then
-        -- The same activation can be reported once per inherited group path;
-        -- collapse those down to a single row per role+scope.
-        local key = p.scope .. "|" .. p.roleDefinitionId
-        if not seen[key] then
-          seen[key] = true
-          local ex = p.expandedProperties or {}
-          table.insert(out, {
-            kind = "azure",
-            state = "active",
-            role = (ex.roleDefinition or {}).displayName or p.roleDefinitionId,
-            scope = (ex.scope or {}).displayName or p.scope,
-            scope_type = (ex.scope or {}).type,
-            scope_id = p.scope,
-            role_definition_id = p.roleDefinitionId,
-            eligibility_id = p.linkedRoleEligibilityScheduleId,
-            member_type = p.memberType,
-            end_time = p.endDateTime,
-          })
+    local scopes, seen_scope = {}, {}
+    for _, it in ipairs(eligible) do
+      if it.scope_id and not seen_scope[it.scope_id] then
+        seen_scope[it.scope_id] = true
+        table.insert(scopes, it.scope_id)
+      end
+    end
+    if #scopes == 0 then
+      return cb({}, nil)
+    end
+
+    local out, seen = {}, {}
+    local left, failed = #scopes, nil
+    local function collect(items)
+      for _, it in ipairs(items) do
+        local p = it.properties or {}
+        -- Only PIM activations, not standing/permanent assignments.
+        if p.assignmentType == "Activated" then
+          -- The same activation can be reported once per inherited group path, and
+          -- again by every child scope queried; keep a single row per role+scope.
+          local key = p.scope .. "|" .. p.roleDefinitionId
+          if not seen[key] then
+            seen[key] = true
+            local ex = p.expandedProperties or {}
+            table.insert(out, {
+              kind = "azure",
+              state = "active",
+              role = (ex.roleDefinition or {}).displayName or p.roleDefinitionId,
+              scope = (ex.scope or {}).displayName or p.scope,
+              scope_type = (ex.scope or {}).type,
+              scope_id = p.scope,
+              role_definition_id = p.roleDefinitionId,
+              eligibility_id = p.linkedRoleEligibilityScheduleId,
+              member_type = p.memberType,
+              end_time = p.endDateTime,
+            })
+          end
         end
       end
     end
-    cb(out, nil)
+    for _, scope in ipairs(scopes) do
+      local url = ARM
+        .. scope
+        .. "/providers/Microsoft.Authorization/roleAssignmentScheduleInstances?api-version="
+        .. ARM_API
+        .. "&$filter=asTarget()"
+      get_all(url, function(items, gerr)
+        if gerr then
+          failed = failed or gerr
+        else
+          collect(items)
+        end
+        left = left - 1
+        if left == 0 then
+          if failed then
+            cb(nil, failed)
+          else
+            cb(out, nil)
+          end
+        end
+      end)
+    end
   end)
 end
 
