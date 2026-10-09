@@ -372,7 +372,8 @@ function M.refresh(on_done)
 				else
 					table.insert(state.errors, label .. ": " .. err)
 				end
-			else
+			end
+			if items then
 				vim.list_extend(state[target_key], items)
 				sort_items(state[target_key])
 			end
@@ -543,7 +544,11 @@ local function submit(items, action)
 		for _, item in ipairs(items) do
 			local label = string.format("%s @ %s", item.role, item.scope)
 			az.dispatch(item, action, opts, function(data, err)
-				if err then
+				if err and action == "activate" and err:lower():find("already exists", 1, true) then
+					-- Already granted (our list was stale); show the real state.
+					notify(("%s is already active — refreshing"):format(label), vim.log.levels.WARN)
+					M.refresh()
+				elseif err then
 					state.selected[key_of(item)] = true
 					render()
 					notify(("%s %s failed:\n%s"):format(action, label, err), vim.log.levels.ERROR)

@@ -318,11 +318,9 @@ function M.azure_active(cb)
         end
         left = left - 1
         if left == 0 then
-          if failed then
-            cb(nil, failed)
-          else
-            cb(out, nil)
-          end
+          -- Hand back what did load alongside the error: one slow or failing
+          -- scope must not hide the activations the others found.
+          cb(out, failed)
         end
       end)
     end
