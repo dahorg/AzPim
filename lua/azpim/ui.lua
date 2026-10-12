@@ -450,7 +450,7 @@ end
 -- returns immediately (often before roleAssignmentScheduleInstances has
 -- caught up), and fan-out across subscriptions can take well past a single
 -- short delay. Poll with backoff instead of refreshing once and giving up.
-local POLL_DELAYS_MS = { 2500, 4000, 8000, 15000, 30000 }
+local POLL_DELAYS_MS = { 2500, 4000, 8000, 15000, 30000, 30000, 30000, 30000, 30000, 30000 }
 
 local arm_poll
 
